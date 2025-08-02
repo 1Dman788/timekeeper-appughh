@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TimeKeep - Employee Portal</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <h2>Employee Portal</h2>
+            <button id="sign-out-btn">Sign Out</button>
+        </nav>
+        <section id="punch-section">
+            <button id="punch-btn">Punch In</button>
+            <p id="punch-message" class="message"></p>
+        </section>
+        <section id="current-period-section" style="display:none;">
+            <h3>Current Pay Period</h3>
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Day</th>
+                            <th>Time In</th>
+                            <th>Time Out</th>
+                            <th>Hours</th>
+                            <th>Pay</th>
+                        </tr>
+                    </thead>
+                    <tbody id="employee-shifts-body">
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <th colspan="4">Total (Period)</th>
+                            <th id="emp-total-hours">0</th>
+                            <th id="emp-total-pay">$0.00</th>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </section>
+        <section id="history-section" style="display:none;">
+            <h3>Previous Pay Periods</h3>
+            <div id="history-container"></div>
+        </section>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
+        import { getAuth, signOut } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
+        import {
+            getFirestore,
+            collection,
+            query,
+            where,
+            getDocs,
+            doc,
+            getDoc,
+            setDoc,
+            updateDoc,
+            addDoc,
+            Timestamp,
+            onSnapshot
+        } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
+
+        // Firebase config
+        const firebaseConfig = {
+            apiKey: "AIzaSyBcIBVNGyy8Bw_9TYJx7hviM0Z1LeSd22E",
+            authDomain: "timekeep2test.firebaseapp.com",
+            projectId: "timekeep2test",
+            storageBucket: "timekeep2test.firebasestorage.app",
+            messagingSenderId: "608331276389",
+            appId: "1:608331276389:web:6b77bd26e63699d88c268c",
+            measurementId: "G-S9JE53BMN3"
+        };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        const signOutBtn = document.getElementById('sign-out-btn');
+        const punchBtn = document.getElementById('punch-btn');
+        const punchMessage = document.getElementById('punch-message');
+        const employeeShiftsBody = document.getElementById('employee-shifts-body');
+        const empTotalHours = document.getElementById('emp-total-hours');
+        const empTotalPay = document.getElementById('emp-total-pay');
+        const currentPeriodSection = document.getElementById('current-period-section');
+        const historySection = document.getElementById('history-section');
+        const historyContainer = document.getElementById('history-container');
+
+        signOutBtn.addEventListener('click', async () => {
+            await signOut(auth);
+            window.location.href = 'index.html';
+        });
+
+        let currentUserDoc = null;
+        let hourlyRate = 0;
+
+        window.addEventListener('load', async () => {
+            const user = auth.currentUser;
+            if (!user) {
+                window.location.href = 'index.html';
+                return;
+            }
+            // Fetch user profile
+            currentUserDoc = await getDoc(doc(db, 'users', user.uid));
+            if (!currentUserDoc.exists()) {
+                window.location.href = 'index.html';
+                return;
+            }
+            const userData = currentUserDoc.data();
+            if (userData.role !== 'employee') {
+                window.location.href = 'index.html';
+                return;
+            }
+            hourlyRate = userData.hourlyRate || 0;
+            // Load current period and history
+            await refreshShiftInfo();
+        });
+
+        async function refreshShiftInfo() {
+            punchMessage.textContent = '';
+            punchBtn.disabled = false;
+            const user = auth.currentUser;
+            if (!user) return;
+            // Determine current pay period
+            const periodStart = await getCurrentPayPeriodStart();
+            const periodEnd = new Date(periodStart.getTime() + 14 * 24 * 60 * 60 * 1000);
+            // Fetch shifts within current period
+            const q = query(collection(db, 'shifts'), where('uid', '==', user.uid), where('date', '>=', formatDate(periodStart)), where('date', '<=', formatDate(periodEnd)));
+            const snapshot = await getDocs(q);
+            const shiftDocs = [];
+            snapshot.forEach(docSnap => shiftDocs.push(docSnap.data()));
+            shiftDocs.sort((a,b) => a.date.localeCompare(b.date));
+            // Determine punch button state for today
+            const todayStr = formatDate(new Date());
+            const todayShift = shiftDocs.find(s => s.date === todayStr);
+            if (!todayShift) {
+                punchBtn.textContent = 'Punch In';
+            } else if (todayShift.timeIn && !todayShift.timeOut) {
+                punchBtn.textContent = 'Punch Out';
+            } else {
+                punchBtn.disabled = true;
+                punchMessage.textContent = 'You have completed your shift for today.';
+            }
+            // Render current period table
+            renderShiftTable(shiftDocs, employeeShiftsBody, empTotalHours, empTotalPay, hourlyRate);
+            currentPeriodSection.style.display = 'block';
+            // Load previous pay periods
+            await loadHistory(user.uid, periodStart, hourlyRate);
+        }
+
+        punchBtn.addEventListener('click', async () => {
+            punchBtn.disabled = true;
+            const user = auth.currentUser;
+            const todayStr = formatDate(new Date());
+            const now = new Date();
+            // Check if shift exists
+            const q = query(collection(db, 'shifts'), where('uid', '==', user.uid), where('date', '==', todayStr));
+            const snapshot = await getDocs(q);
+            if (snapshot.empty) {
+                // Punch In
+                await addDoc(collection(db, 'shifts'), {
+                    uid: user.uid,
+                    date: todayStr,
+                    timeIn: Timestamp.fromDate(now),
+                    timeOut: null,
+                    adjTimeIn: null,
+                    adjTimeOut: null
+                });
+                punchMessage.style.color = 'green';
+                punchMessage.textContent = 'Punched in at ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } else {
+                const docRef = snapshot.docs[0].ref;
+                const data = snapshot.docs[0].data();
+                if (data.timeIn && !data.timeOut) {
+                    // Punch Out
+                    await updateDoc(docRef, { timeOut: Timestamp.fromDate(now) });
+                    punchMessage.style.color = 'green';
+                    punchMessage.textContent = 'Punched out at ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                }
+            }
+            // Refresh
+            await refreshShiftInfo();
+        });
+
+        function renderShiftTable(shifts, tbody, totalHoursEl, totalPayEl, rate) {
+            tbody.innerHTML = '';
+            let totalHours = 0;
+            let totalPay = 0;
+            for (const s of shifts) {
+                const dateStr = s.date;
+                const dateObj = new Date(dateStr);
+                const dayName = dateObj.toLocaleDateString(undefined, { weekday: 'long' });
+                const timeIn = s.adjTimeIn ? new Date(s.adjTimeIn.seconds * 1000) : (s.timeIn ? new Date(s.timeIn.seconds * 1000) : null);
+                const timeOut = s.adjTimeOut ? new Date(s.adjTimeOut.seconds * 1000) : (s.timeOut ? new Date(s.timeOut.seconds * 1000) : null);
+                let hours = 0;
+                if (timeIn && timeOut) {
+                    hours = Math.round((timeOut - timeIn) / 60000) / 60;
+                }
+                const pay = hours * rate;
+                totalHours += hours;
+                totalPay += pay;
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${dateStr}</td>
+                    <td>${dayName}</td>
+                    <td>${timeIn ? timeIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</td>
+                    <td>${timeOut ? timeOut.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</td>
+                    <td>${hours.toFixed(2)}</td>
+                    <td>$${pay.toFixed(2)}</td>
+                `;
+                tbody.appendChild(row);
+            }
+            totalHoursEl.textContent = totalHours.toFixed(2);
+            totalPayEl.textContent = `$${totalPay.toFixed(2)}`;
+        }
+
+        function formatDate(date) {
+            return date.toISOString().slice(0, 10);
+        }
+
+        async function getCurrentPayPeriodStart() {
+            const settingsDoc = await getDoc(doc(db, 'settings', 'payPeriod'));
+            let firstStart;
+            if (settingsDoc.exists()) {
+                firstStart = settingsDoc.data().startDate.toDate();
+            } else {
+                const now = new Date();
+                firstStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            }
+            const today = new Date();
+            const diffDays = Math.floor((today - firstStart) / (24 * 60 * 60 * 1000));
+            const periodsPassed = Math.floor(diffDays / 14);
+            return new Date(firstStart.getTime() + periodsPassed * 14 * 24 * 60 * 60 * 1000);
+        }
+
+        async function loadHistory(uid, currentPeriodStart, rate) {
+            // Fetch all shifts for user
+            const q = query(collection(db, 'shifts'), where('uid', '==', uid));
+            const snapshot = await getDocs(q);
+            const allShifts = [];
+            snapshot.forEach(docSnap => allShifts.push(docSnap.data()));
+            // Group shifts into periods
+            const settingsDoc = await getDoc(doc(db, 'settings', 'payPeriod'));
+            let firstStart;
+            if (settingsDoc.exists()) {
+                firstStart = settingsDoc.data().startDate.toDate();
+            } else {
+                firstStart = new Date();
+            }
+            // Sort shifts by date
+            allShifts.sort((a,b) => a.date.localeCompare(b.date));
+            const periods = {};
+            for (const s of allShifts) {
+                const dateObj = new Date(s.date);
+                const diffDays = Math.floor((dateObj - firstStart) / (24 * 60 * 60 * 1000));
+                const periodIndex = Math.floor(diffDays / 14);
+                if (!periods[periodIndex]) periods[periodIndex] = [];
+                periods[periodIndex].push(s);
+            }
+            // Remove current period and list previous ones sorted descending
+            const periodIndices = Object.keys(periods).map(Number).filter(i => {
+                const periodStart = new Date(firstStart.getTime() + i * 14 * 24 * 60 * 60 * 1000);
+                return periodStart < currentPeriodStart;
+            }).sort((a,b) => b - a);
+            historyContainer.innerHTML = '';
+            if (periodIndices.length === 0) {
+                historySection.style.display = 'none';
+                return;
+            }
+            historySection.style.display = 'block';
+            periodIndices.forEach(i => {
+                const periodStart = new Date(firstStart.getTime() + i * 14 * 24 * 60 * 60 * 1000);
+                const periodEnd = new Date(periodStart.getTime() + 14 * 24 * 60 * 60 * 1000);
+                const shifts = periods[i];
+                // compute totals
+                let periodHours = 0;
+                let periodPay = 0;
+                const table = document.createElement('table');
+                table.innerHTML = `
+                    <caption>${periodStart.toLocaleDateString()} - ${new Date(periodEnd.getTime() - 1).toLocaleDateString()}</caption>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Day</th>
+                            <th>Time In</th>
+                            <th>Time Out</th>
+                            <th>Hours</th>
+                            <th>Pay</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                    <tfoot>
+                        <tr>
+                            <th colspan="4">Total</th>
+                            <th class="period-hours">0</th>
+                            <th class="period-pay">$0.00</th>
+                        </tr>
+                    </tfoot>
+                `;
+                const tbody = table.querySelector('tbody');
+                shifts.sort((a,b) => a.date.localeCompare(b.date));
+                for (const s of shifts) {
+                    const timeIn = s.adjTimeIn ? new Date(s.adjTimeIn.seconds * 1000) : (s.timeIn ? new Date(s.timeIn.seconds * 1000) : null);
+                    const timeOut = s.adjTimeOut ? new Date(s.adjTimeOut.seconds * 1000) : (s.timeOut ? new Date(s.timeOut.seconds * 1000) : null);
+                    let hours = 0;
+                    if (timeIn && timeOut) {
+                        hours = Math.round((timeOut - timeIn) / 60000) / 60;
+                    }
+                    const pay = hours * rate;
+                    periodHours += hours;
+                    periodPay += pay;
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${s.date}</td>
+                        <td>${new Date(s.date).toLocaleDateString(undefined, { weekday: 'long' })}</td>
+                        <td>${timeIn ? timeIn.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</td>
+                        <td>${timeOut ? timeOut.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</td>
+                        <td>${hours.toFixed(2)}</td>
+                        <td>$${pay.toFixed(2)}</td>
+                    `;
+                    tbody.appendChild(row);
+                }
+                table.querySelector('.period-hours').textContent = periodHours.toFixed(2);
+                table.querySelector('.period-pay').textContent = `$${periodPay.toFixed(2)}`;
+                historyContainer.appendChild(table);
+            });
+        }
+    </script>
+</body>
+</html>

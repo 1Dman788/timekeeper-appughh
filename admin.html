@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TimeKeep - Admin Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <nav>
+            <h2>Admin Dashboard</h2>
+            <button id="sign-out-btn">Sign Out</button>
+        </nav>
+        <section id="employee-selection">
+            <h3>Select Employee</h3>
+            <select id="employee-select">
+                <option value="">-- Choose employee --</option>
+            </select>
+        </section>
+        <section id="employee-details" style="display: none;">
+            <h3 id="employee-name"></h3>
+            <div class="form-inline">
+                <label>Hourly Rate ($/hr): </label>
+                <input type="number" id="hourly-rate" min="0" step="0.01">
+                <button id="update-rate-btn">Update Rate</button>
+            </div>
+            <div class="table-container">
+                <table id="shifts-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Day</th>
+                            <th>Time In</th>
+                            <th>Adj. In</th>
+                            <th>Time Out</th>
+                            <th>Adj. Out</th>
+                            <th>Hours</th>
+                            <th>Pay</th>
+                        </tr>
+                    </thead>
+                    <tbody id="shifts-body">
+                    </tbody>
+                    <tfoot>
+                        <tr>
+                            <th colspan="6">Total (Period)</th>
+                            <th id="total-hours">0</th>
+                            <th id="total-pay">$0.00</th>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+            <button id="export-csv-btn">Export CSV</button>
+        </section>
+        <hr>
+        <section id="new-employee-section">
+            <h3>Create Employee Account</h3>
+            <div class="form-inline">
+                <input type="text" id="new-username" placeholder="Username" required>
+                <input type="email" id="new-email" placeholder="Email" required>
+                <input type="password" id="new-password" placeholder="Password" required>
+                <input type="number" id="new-hourly-rate" placeholder="Hourly Rate" min="0" step="0.01" required>
+                <button id="create-employee-btn">Create Employee</button>
+            </div>
+            <p id="create-employee-message" class="message"></p>
+        </section>
+        <hr>
+        <section id="pay-period-section">
+            <h3>Pay Period Settings</h3>
+            <div class="form-inline">
+                <label>First Pay Period Start Date: </label>
+                <input type="date" id="pay-period-start">
+                <button id="save-pay-period-btn">Save</button>
+            </div>
+            <p id="pay-period-message" class="message"></p>
+        </section>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
+        import { getAuth, signOut } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
+import {
+            getFirestore,
+            collection,
+            query,
+            where,
+            getDocs,
+            doc,
+            getDoc,
+            setDoc,
+            updateDoc,
+            addDoc,
+            Timestamp,
+            onSnapshot
+        } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
+        import {
+            getAuth as getAuthSecondary,
+            createUserWithEmailAndPassword
+        } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
+
+        // Initialize Firebase
+        const firebaseConfig = {
+            apiKey: "AIzaSyBcIBVNGyy8Bw_9TYJx7hviM0Z1LeSd22E",
+            authDomain: "timekeep2test.firebaseapp.com",
+            projectId: "timekeep2test",
+            storageBucket: "timekeep2test.firebasestorage.app",
+            messagingSenderId: "608331276389",
+            appId: "1:608331276389:web:6b77bd26e63699d88c268c",
+            measurementId: "G-S9JE53BMN3"
+        };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // Secondary app for creating users without affecting current auth state
+        const secondaryApp = initializeApp(firebaseConfig, 'Secondary');
+        const secondaryAuth = getAuthSecondary(secondaryApp);
+
+        const employeeSelect = document.getElementById('employee-select');
+        const employeeDetailsSection = document.getElementById('employee-details');
+        const employeeNameEl = document.getElementById('employee-name');
+        const hourlyRateInput = document.getElementById('hourly-rate');
+        const updateRateBtn = document.getElementById('update-rate-btn');
+        const shiftsBody = document.getElementById('shifts-body');
+        const totalHoursEl = document.getElementById('total-hours');
+        const totalPayEl = document.getElementById('total-pay');
+        const exportCsvBtn = document.getElementById('export-csv-btn');
+
+        const newUsername = document.getElementById('new-username');
+        const newEmail = document.getElementById('new-email');
+        const newPassword = document.getElementById('new-password');
+        const newHourlyRate = document.getElementById('new-hourly-rate');
+        const createEmployeeBtn = document.getElementById('create-employee-btn');
+        const createEmployeeMsg = document.getElementById('create-employee-message');
+
+        const payPeriodStartInput = document.getElementById('pay-period-start');
+        const savePayPeriodBtn = document.getElementById('save-pay-period-btn');
+        const payPeriodMsg = document.getElementById('pay-period-message');
+
+        document.getElementById('sign-out-btn').addEventListener('click', async () => {
+            await signOut(auth);
+            window.location.href = 'index.html';
+        });
+
+        // On load: verify admin
+        window.addEventListener('load', async () => {
+            const user = auth.currentUser;
+            if (!user) {
+                window.location.href = 'index.html';
+                return;
+            }
+            // Verify role
+            const userDoc = await getDoc(doc(db, 'users', user.uid));
+            if (!userDoc.exists() || userDoc.data().role !== 'admin') {
+                window.location.href = 'index.html';
+                return;
+            }
+            // Populate employee list
+            await loadEmployees();
+            // Load pay period start date
+            await loadPayPeriodStart();
+        });
+
+        async function loadEmployees() {
+            employeeSelect.innerHTML = '<option value="">-- Choose employee --</option>';
+            const q = query(collection(db, 'users'), where('role', '==', 'employee'));
+            const snapshot = await getDocs(q);
+            snapshot.forEach(docSnap => {
+                const data = docSnap.data();
+                const option = document.createElement('option');
+                option.value = docSnap.id;
+                option.textContent = data.username || data.email;
+                employeeSelect.appendChild(option);
+            });
+        }
+
+        employeeSelect.addEventListener('change', async () => {
+            const uid = employeeSelect.value;
+            if (!uid) {
+                employeeDetailsSection.style.display = 'none';
+                return;
+            }
+            // Load selected employee details and shifts
+            const empDoc = await getDoc(doc(db, 'users', uid));
+            if (empDoc.exists()) {
+                const empData = empDoc.data();
+                employeeNameEl.textContent = `${empData.username || empData.email}`;
+                hourlyRateInput.value = empData.hourlyRate || 0;
+                employeeDetailsSection.style.display = 'block';
+                // Load shifts and render table
+                await loadShiftsForEmployee(uid, empData.hourlyRate || 0);
+            }
+        });
+
+        let shiftUnsubscribe = null;
+        async function loadShiftsForEmployee(uid, rate) {
+            if (shiftUnsubscribe) {
+                shiftUnsubscribe();
+                shiftUnsubscribe = null;
+            }
+            const periodStart = await getCurrentPayPeriodStart();
+            const periodEndDate = new Date(periodStart.getTime() + 14 * 24 * 60 * 60 * 1000);
+            const q = query(collection(db, 'shifts'), where('uid', '==', uid), where('date', '>=', formatDate(periodStart)), where('date', '<=', formatDate(periodEndDate)));
+            shiftUnsubscribe = onSnapshot(q, (snapshot) => {
+                shiftsBody.innerHTML = '';
+                let totalHours = 0;
+                let totalPay = 0;
+                const shiftDocs = [];
+                snapshot.forEach(docSnap => shiftDocs.push({ id: docSnap.id, data: docSnap.data() }));
+                shiftDocs.sort((a,b) => a.data.date.localeCompare(b.data.date));
+                shiftDocs.forEach(({ id: shiftId, data }) => {
+                    const dateStr = data.date;
+                    const dateObj = new Date(dateStr);
+                    const dayName = dateObj.toLocaleDateString(undefined, { weekday: 'long' });
+                    const timeInDisplay = data.timeIn ? new Date(data.timeIn.seconds * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '';
+                    const timeOutDisplay = data.timeOut ? new Date(data.timeOut.seconds * 1000).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' }) : '';
+                    const adjInVal = data.adjTimeIn ? new Date(data.adjTimeIn.seconds * 1000).toISOString().slice(0,16) : '';
+                    const adjOutVal = data.adjTimeOut ? new Date(data.adjTimeOut.seconds * 1000).toISOString().slice(0,16) : '';
+                    const start = data.adjTimeIn ? new Date(data.adjTimeIn.seconds * 1000) : (data.timeIn ? new Date(data.timeIn.seconds * 1000) : null);
+                    const end = data.adjTimeOut ? new Date(data.adjTimeOut.seconds * 1000) : (data.timeOut ? new Date(data.timeOut.seconds * 1000) : null);
+                    let hours = 0;
+                    if (start && end) {
+                        hours = Math.round((end - start) / 60000) / 60;
+                    }
+                    const pay = hours * rate;
+                    totalHours += hours;
+                    totalPay += pay;
+                    const row = document.createElement('tr');
+                    row.innerHTML = `
+                        <td>${dateStr}</td>
+                        <td>${dayName}</td>
+                        <td>${timeInDisplay}</td>
+                        <td><input type="datetime-local" class="adj-in" data-id="${shiftId}" value="${adjInVal}"></td>
+                        <td>${timeOutDisplay}</td>
+                        <td><input type="datetime-local" class="adj-out" data-id="${shiftId}" value="${adjOutVal}"></td>
+                        <td>${hours.toFixed(2)}</td>
+                        <td>$${pay.toFixed(2)}</td>
+                    `;
+                    shiftsBody.appendChild(row);
+                });
+                totalHoursEl.textContent = totalHours.toFixed(2);
+                totalPayEl.textContent = `$${totalPay.toFixed(2)}`;
+                document.querySelectorAll('.adj-in').forEach(input => {
+                    input.onchange = async (e) => {
+                        const shiftId = e.target.getAttribute('data-id');
+                        const val = e.target.value;
+                        const ts = val ? Timestamp.fromDate(new Date(val)) : null;
+                        await updateDoc(doc(db, 'shifts', shiftId), { adjTimeIn: ts });
+                    };
+                });
+                document.querySelectorAll('.adj-out').forEach(input => {
+                    input.onchange = async (e) => {
+                        const shiftId = e.target.getAttribute('data-id');
+                        const val = e.target.value;
+                        const ts = val ? Timestamp.fromDate(new Date(val)) : null;
+                        await updateDoc(doc(db, 'shifts', shiftId), { adjTimeOut: ts });
+                    };
+                });
+            });
+        }
+
+        function formatDate(date) {
+            return date.toISOString().slice(0, 10);
+        }
+
+        async function getCurrentPayPeriodStart() {
+            // Fetch saved first start date
+            const settingsDoc = await getDoc(doc(db, 'settings', 'payPeriod'));
+            let firstStart;
+            if (settingsDoc.exists()) {
+                const data = settingsDoc.data();
+                firstStart = data.startDate.toDate();
+            } else {
+                // default to start of current week if none set
+                const now = new Date();
+                firstStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            }
+            // Determine current 14-day period containing today
+            const today = new Date();
+            // find difference in days from firstStart to today
+            const diffDays = Math.floor((today - firstStart) / (24 * 60 * 60 * 1000));
+            const periodsPassed = Math.floor(diffDays / 14);
+            const periodStart = new Date(firstStart.getTime() + periodsPassed * 14 * 24 * 60 * 60 * 1000);
+            return periodStart;
+        }
+
+        // Update hourly rate
+        updateRateBtn.addEventListener('click', async () => {
+            const uid = employeeSelect.value;
+            if (!uid) return;
+            const rate = parseFloat(hourlyRateInput.value);
+            await updateDoc(doc(db, 'users', uid), { hourlyRate: rate });
+            // reload shifts to update pay values
+            await loadShiftsForEmployee(uid, rate);
+            alert('Hourly rate updated.');
+        });
+
+        // Export CSV
+        exportCsvBtn.addEventListener('click', () => {
+            let csv = 'Date,Day,Time In,Adj In,Time Out,Adj Out,Hours,Pay\n';
+            const rows = shiftsBody.querySelectorAll('tr');
+            rows.forEach(row => {
+                const cols = row.querySelectorAll('td');
+                const rowData = [];
+                cols.forEach((cell, index) => {
+                    if (index === 3 || index === 5) {
+                        // inputs for adj times
+                        const input = cell.querySelector('input');
+                        rowData.push(input ? input.value : '');
+                    } else {
+                        rowData.push(cell.textContent);
+                    }
+                });
+                csv += rowData.join(',') + '\n';
+            });
+            // add totals row
+            csv += `,,,Total,, ,${totalHoursEl.textContent},${totalPayEl.textContent.replace('$','')}`;
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${employeeNameEl.textContent.replace(/\s+/g, '_')}_payperiod.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        // Create employee
+        createEmployeeBtn.addEventListener('click', async () => {
+            createEmployeeMsg.textContent = '';
+            const username = newUsername.value.trim();
+            const email = newEmail.value.trim();
+            const password = newPassword.value;
+            const rate = parseFloat(newHourlyRate.value);
+            if (!email || !password || !username || isNaN(rate)) {
+                createEmployeeMsg.textContent = 'All fields are required.';
+                return;
+            }
+            try {
+                // Use secondary auth to create user without signing out
+                const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+                const newUid = cred.user.uid;
+                // Create user doc
+                await setDoc(doc(db, 'users', newUid), {
+                    username: username,
+                    email: email,
+                    role: 'employee',
+                    hourlyRate: rate
+                });
+                createEmployeeMsg.style.color = 'green';
+                createEmployeeMsg.textContent = 'Employee account created successfully.';
+                // Reset fields
+                newUsername.value = '';
+                newEmail.value = '';
+                newPassword.value = '';
+                newHourlyRate.value = '';
+                await loadEmployees();
+            } catch (error) {
+                createEmployeeMsg.style.color = 'red';
+                createEmployeeMsg.textContent = error.message;
+            }
+        });
+
+        // Pay period settings
+        async function loadPayPeriodStart() {
+            const settingsDoc = await getDoc(doc(db, 'settings', 'payPeriod'));
+            if (settingsDoc.exists()) {
+                const data = settingsDoc.data();
+                const d = data.startDate.toDate();
+                payPeriodStartInput.value = d.toISOString().slice(0,10);
+            }
+        }
+
+        savePayPeriodBtn.addEventListener('click', async () => {
+            const dateStr = payPeriodStartInput.value;
+            payPeriodMsg.textContent = '';
+            if (!dateStr) {
+                payPeriodMsg.textContent = 'Please select a start date.';
+                return;
+            }
+            const dateObj = new Date(dateStr + 'T00:00:00');
+            try {
+                await setDoc(doc(db, 'settings', 'payPeriod'), { startDate: Timestamp.fromDate(dateObj) });
+                payPeriodMsg.style.color = 'green';
+                payPeriodMsg.textContent = 'Pay period start date saved.';
+                // reload current employee shifts if selected
+                const uid = employeeSelect.value;
+                if (uid) {
+                    const rate = parseFloat(hourlyRateInput.value);
+                    await loadShiftsForEmployee(uid, rate);
+                }
+            } catch (error) {
+                payPeriodMsg.style.color = 'red';
+                payPeriodMsg.textContent = error.message;
+            }
+        });
+    </script>
+</body>
+</html>
