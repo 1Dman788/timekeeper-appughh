@@ -33,116 +33,116 @@
 
   <!-- Firebase SDK -->
   <script type="module">
-    import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
-    import {
-      getAuth,
-      signInWithEmailAndPassword,
-      createUserWithEmailAndPassword,
-      onAuthStateChanged,
-      signOut
-    } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
-    import {
-      getFirestore,
-      doc,
-      getDoc,
-      setDoc
-    } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
+  import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js';
+  import {
+    getAuth,
+    signInWithEmailAndPassword,
+    createUserWithEmailAndPassword,
+    onAuthStateChanged,
+    signOut
+  } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js';
+  import {
+    getFirestore,
+    doc,
+    getDoc,
+    setDoc
+  } from 'https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js';
 
-    const firebaseConfig = {
-      apiKey: "AIzaSyBcIBVNGyy8Bw_9TYJx7hviM0Z1LeSd22E",
-      authDomain: "timekeep2test.firebaseapp.com",
-      projectId: "timekeep2test",
-      storageBucket: "timekeep2test.firebasestorage.app",
-      messagingSenderId: "608331276389",
-      appId: "1:608331276389:web:6b77bd26e63699d88c268c",
-      measurementId: "G-S9JE53BMN3"
-    };
+  const firebaseConfig = {
+    apiKey: "AIzaSyBcIBVNGyy8Bw_9TYJx7hviM0Z1LeSd22E",
+    authDomain: "timekeep2test.firebaseapp.com",
+    projectId: "timekeep2test",
+    storageBucket: "timekeep2test.firebasestorage.app",
+    messagingSenderId: "608331276389",
+    appId: "1:608331276389:web:6b77bd26e63699d88c268c",
+    measurementId: "G-S9JE53BMN3"
+  };
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
+  const db = getFirestore(app);
 
-    window.addEventListener('DOMContentLoaded', () => {
-      const loginForm = document.getElementById('login-form');
-      const registerForm = document.getElementById('register-form');
-      const loginMessage = document.getElementById('login-message');
-      const registerMessage = document.getElementById('register-message');
+  // 👇 Wrap everything inside DOMContentLoaded to wait for the page to load
+  window.addEventListener('DOMContentLoaded', () => {
+    const loginForm = document.getElementById('login-form');
+    const registerForm = document.getElementById('register-form');
+    const loginMessage = document.getElementById('login-message');
+    const registerMessage = document.getElementById('register-message');
 
-      loginForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const email = document.getElementById('login-email').value.trim();
-        const password = document.getElementById('login-password').value;
-        loginMessage.textContent = '';
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('login-email').value.trim();
+      const password = document.getElementById('login-password').value;
+      loginMessage.textContent = '';
 
-        try {
-          const cred = await signInWithEmailAndPassword(auth, email, password);
-          const user = cred.user;
-          const userDocRef = doc(db, 'users', user.uid);
-          const userDoc = await getDoc(userDocRef);
+      try {
+        const cred = await signInWithEmailAndPassword(auth, email, password);
+        const user = cred.user;
+        const userDocRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userDocRef);
 
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            if (data.role === 'admin') {
-              window.location.href = 'admin.html';
-            } else {
-              window.location.href = 'employee.html';
-            }
-          } else {
-            loginMessage.textContent = 'No user profile found.';
-            await signOut(auth);
-          }
-        } catch (error) {
-          loginMessage.textContent = error.message;
-        }
-      });
-
-      registerForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        registerMessage.textContent = '';
-        const username = document.getElementById('register-username').value.trim();
-        const email = document.getElementById('register-email').value.trim();
-        const password = document.getElementById('register-password').value;
-
-        if (!username || !email || !password) {
-          registerMessage.textContent = 'All fields are required.';
-          return;
-        }
-
-        try {
-          const cred = await createUserWithEmailAndPassword(auth, email, password);
-          const newUid = cred.user.uid;
-          await setDoc(doc(db, 'users', newUid), {
-            username,
-            email,
-            role: 'admin',
-            hourlyRate: 0
-          });
-          registerMessage.style.color = 'green';
-          registerMessage.textContent = 'Admin account created. Redirecting...';
-          setTimeout(() => {
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          if (data.role === 'admin') {
             window.location.href = 'admin.html';
-          }, 1000);
-        } catch (error) {
-          registerMessage.style.color = 'red';
-          registerMessage.textContent = error.message;
+          } else {
+            window.location.href = 'employee.html';
+          }
+        } else {
+          loginMessage.textContent = 'No user profile found.';
+          await signOut(auth);
         }
-      });
+      } catch (error) {
+        loginMessage.textContent = error.message;
+      }
+    });
 
-      onAuthStateChanged(auth, async (user) => {
-        if (user) {
-          const userDocRef = doc(db, 'users', user.uid);
-          const userDoc = await getDoc(userDocRef);
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            if (data.role === 'admin') {
-              window.location.href = 'admin.html';
-            } else {
-              window.location.href = 'employee.html';
-            }
+    registerForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      registerMessage.textContent = '';
+      const username = document.getElementById('register-username').value.trim();
+      const email = document.getElementById('register-email').value.trim();
+      const password = document.getElementById('register-password').value;
+
+      if (!username || !email || !password) {
+        registerMessage.textContent = 'All fields are required.';
+        return;
+      }
+
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, email, password);
+        const newUid = cred.user.uid;
+        await setDoc(doc(db, 'users', newUid), {
+          username,
+          email,
+          role: 'admin',
+          hourlyRate: 0
+        });
+        registerMessage.style.color = 'green';
+        registerMessage.textContent = 'Admin account created. Redirecting...';
+        setTimeout(() => {
+          window.location.href = 'admin.html';
+        }, 1000);
+      } catch (error) {
+        registerMessage.style.color = 'red';
+        registerMessage.textContent = error.message;
+      }
+    });
+
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        const userDocRef = doc(db, 'users', user.uid);
+        const userDoc = await getDoc(userDocRef);
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          if (data.role === 'admin') {
+            window.location.href = 'admin.html';
+          } else {
+            window.location.href = 'employee.html';
           }
         }
-      });
+      }
     });
-  </script>
-</body>
-</html>
+  });
+</script>
+
